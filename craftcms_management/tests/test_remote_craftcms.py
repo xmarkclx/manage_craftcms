@@ -8,6 +8,7 @@ from craftcms_management.remote_craftcms import (
     _RemoteCraftCmsBackup,
     _RemoteCraftCmsExtractor,
     _RemoteCraftCmsImporter,
+    _backup_path_from_craft_output,
     _build_remote_craft_db_backup_command,
     _build_remote_craft_db_dump_command,
     _build_remote_craft_db_restore_command,
@@ -50,7 +51,11 @@ class RemoteCraftCmsCommandTests(unittest.TestCase):
         self.assertIn("cd /site/current", command)
         self.assertIn(". ./.env", command)
         self.assertIn("mysqldump", command)
+        self.assertIn("--no-tablespaces", command)
+        self.assertIn('${DB_USER:+--user="$DB_USER"}', command)
+        self.assertIn('${DB_PORT:+--port="$DB_PORT"}', command)
         self.assertIn("pg_dump", command)
+        self.assertIn('${DB_USER:+--username="$DB_USER"}', command)
         self.assertNotIn("db/backup", command)
         self.assertNotIn("db/restore", command)
         self.assertNotIn("scp", command)
@@ -162,23 +167,57 @@ class ExtractProductionDbTests(unittest.TestCase):
 
     @patch("craftcms_management.remote_craftcms.timestamp")
     @patch("craftcms_management.remote_ssh.subprocess.run")
-    def test_streams_remote_dump_to_local_file_without_remote_writes(self, run, timestamp) -> None:
-        """Extract the remote database through SSH stdout."""
+    def test_backs_up_remote_database_and_downloads_backup(self, run, timestamp) -> None:
+        """Create a Craft backup remotely and download the generated dump."""
         timestamp.return_value = "20260520-130000"
         config = RemoteConfig("forge", "example.com", "/site/current")
+        run.return_value.stdout = (
+            "Backing up the database ... done\n"
+            "Backup file: /site/current/storage/backups/craftcms.sql (114.257 MB)\n"
+        )
 
         with TemporaryDirectory() as tmp:
             with patch("craftcms_management.remote_craftcms.TMP_DIR", Path(tmp)):
                 db_path = _RemoteCraftCmsExtractor(config, "production").extract_db()
 
         self.assertEqual(db_path.name, "production-20260520-130000.sql")
-        self.assertEqual(run.call_args.args[0][0], "ssh")
-        self.assertEqual(run.call_args.args[0][1], "forge@example.com")
-        self.assertIn("mysqldump", run.call_args.args[0][2])
-        self.assertIn("pg_dump", run.call_args.args[0][2])
-        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
-        self.assertTrue(run.call_args.kwargs["text"])
-        self.assertTrue(run.call_args.kwargs["check"])
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    [
+                        "ssh",
+                        "forge@example.com",
+                        "cd /site/current && php craft db/backup --interactive=0",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                ),
+                call(
+                    [
+                        "scp",
+                        "forge@example.com:/site/current/storage/backups/craftcms.sql",
+                        str(db_path),
+                    ],
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                ),
+            ],
+        )
+
+    def test_extracts_backup_path_from_craft_output(self) -> None:
+        """Read the generated backup path from Craft's command output."""
+        output = "Backing up the database ... done\nBackup file: /tmp/craft.sql (1 KB)\n"
+
+        self.assertEqual(_backup_path_from_craft_output(output), "/tmp/craft.sql")
+
+    def test_missing_backup_path_raises_runtime_error(self) -> None:
+        """Reject Craft backup output that does not name a file."""
+        with self.assertRaisesRegex(RuntimeError, "did not report a backup file path"):
+            _backup_path_from_craft_output("Backing up the database ... done\n")
 
     @patch("craftcms_management.remote_craftcms._RemoteCraftCmsExtractor")
     def test_public_extract_uses_production_config(self, extractor_class) -> None:

@@ -12,18 +12,19 @@ from craftcms_management.craftcms import (
 )
 from craftcms_management.remote_ssh import (
     RemoteConfig,
+    build_scp_from_remote_command,
     build_scp_command,
     build_ssh_command,
     in_remote_path,
     load_remote_config,
     run_command,
-    run_command_to_file,
+    run_command_capture,
     run_optional_command,
 )
 
 
 def extract_production_db() -> Path:
-    """Dump the production Craft CMS database to local temp storage without mutating production."""
+    """Back up the production Craft CMS database and download it to local temp storage."""
     return _RemoteCraftCmsExtractor.from_env("PRODUCTION").extract_db()
 
 
@@ -62,6 +63,16 @@ def _build_remote_craft_db_backup_command(config: RemoteConfig) -> str:
     return in_remote_path(config, [build_craft_db_backup_shell_command()])
 
 
+def _backup_path_from_craft_output(output: str) -> str:
+    """Extract the backup file path from Craft's db/backup output."""
+    for line in output.splitlines():
+        _label, separator, value = line.partition("Backup file:")
+        if separator:
+            path, _separator, _size = value.strip().partition(" (")
+            return path
+    raise RuntimeError("Craft database backup did not report a backup file path.")
+
+
 def _build_remote_cleanup_command(remote_path: str) -> str:
     """Build the remote shell command that removes the copied dump file."""
     return f"rm -f {shlex.quote(remote_path)}"
@@ -78,16 +89,16 @@ def _build_remote_craft_db_dump_command(config: RemoteConfig) -> str:
             (
                 'case "$DB_DRIVER" in '
                 'mysql) MYSQL_PWD="$DB_PASSWORD" mysqldump '
-                "--single-transaction --quick --routines --triggers "
-                '--host "${DB_SERVER:-localhost}" '
-                '${DB_USER:+--user "$DB_USER"} '
-                '${DB_PORT:+--port "$DB_PORT"} '
+                "--single-transaction --quick --routines --triggers --no-tablespaces "
+                '--host="${DB_SERVER:-localhost}" '
+                '${DB_USER:+--user="$DB_USER"} '
+                '${DB_PORT:+--port="$DB_PORT"} '
                 '"$DB_DATABASE" ;; '
                 'pgsql|postgres|postgresql) PGPASSWORD="$DB_PASSWORD" pg_dump '
                 "--no-owner --no-privileges "
-                '--host "${DB_SERVER:-localhost}" '
-                '${DB_USER:+--username "$DB_USER"} '
-                '${DB_PORT:+--port "$DB_PORT"} '
+                '--host="${DB_SERVER:-localhost}" '
+                '${DB_USER:+--username="$DB_USER"} '
+                '${DB_PORT:+--port="$DB_PORT"} '
                 '"$DB_DATABASE" ;; '
                 '*) echo "Unsupported DB_DRIVER: $DB_DRIVER" >&2; exit 1 ;; '
                 "esac"
@@ -110,16 +121,20 @@ class _RemoteCraftCmsExtractor:
         return cls(load_remote_config(prefix=prefix), prefix.lower())
 
     def extract_db(self) -> Path:
-        """Stream a remote database dump into local temp storage."""
+        """Create a Craft backup on the remote server and download it locally."""
         TMP_DIR.mkdir(parents=True, exist_ok=True)
         output_path = TMP_DIR / f"{safe_filename(self.label, default='remote')}-{timestamp()}.sql"
-        dump_command = _build_remote_craft_db_dump_command(self.config)
-        ssh_dump_command = build_ssh_command(self.config, dump_command)
+        backup_command = _build_remote_craft_db_backup_command(self.config)
+        ssh_backup_command = build_ssh_command(self.config, backup_command)
+        backup_output = run_command_capture(
+            ssh_backup_command,
+            f"Failed to backup {self.label} database",
+        )
+        remote_backup_path = _backup_path_from_craft_output(backup_output)
 
-        run_command_to_file(
-            ssh_dump_command,
-            output_path,
-            f"Failed to dump {self.label} database",
+        run_command(
+            build_scp_from_remote_command(self.config, remote_backup_path, output_path),
+            f"Failed to download {self.label} database backup",
         )
         return output_path.resolve()
 

@@ -39,6 +39,15 @@ def build_scp_command(db_path: Path, config: RemoteConfig, remote_path: str) -> 
     return ["scp", str(db_path), f"{config.target}:{remote_path}"]
 
 
+def build_scp_from_remote_command(
+    config: RemoteConfig,
+    remote_path: str,
+    local_path: Path,
+) -> list[str]:
+    """Build the command that copies a file from the remote server."""
+    return ["scp", f"{config.target}:{remote_path}", str(local_path)]
+
+
 def in_remote_path(config: RemoteConfig, commands: list[str]) -> str:
     """Build a shell command that runs commands from the configured remote path."""
     return " && ".join([f"cd {shlex.quote(config.path)}", *commands])
@@ -58,6 +67,24 @@ def run_command(command: list[str], failure_message: str) -> None:
     except subprocess.CalledProcessError as exc:
         error = exc.stderr.strip() or f"{command[0]} exited with code {exc.returncode}"
         raise RuntimeError(f"{failure_message}: {error}") from exc
+
+
+def run_command_capture(command: list[str], failure_message: str) -> str:
+    """Run a command and return stdout."""
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Required command not found: {command[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        error = exc.stderr.strip() or f"{command[0]} exited with code {exc.returncode}"
+        raise RuntimeError(f"{failure_message}: {error}") from exc
+    return result.stdout
 
 
 def run_command_to_file(command: list[str], output_path: Path, failure_message: str) -> None:

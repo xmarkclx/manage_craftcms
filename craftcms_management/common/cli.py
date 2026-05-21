@@ -4,10 +4,10 @@ ERROR_COLOR = "\033[31m"
 SUCCESS_COLOR = "\033[32m"
 RESET = "\033[0m"
 
-INFO_ICON = "ℹ️"
-WARNING_ICON = "⚠️"
-ERROR_ICON = "❌"
-SUCCESS_ICON = "✅"
+INFO_ICON = "[i]"
+WARNING_ICON = "[!]"
+ERROR_ICON = "[x]"
+SUCCESS_ICON = "[ok]"
 
 
 def status(icon: str, color: str, message: str) -> None:

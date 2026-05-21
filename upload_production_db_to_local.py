@@ -7,9 +7,9 @@ from craftcms_management.remote_craftcms import extract_production_db
 
 def main() -> None:
     """Download the production Craft CMS database dump and import it locally."""
-    info("Starting read-only production database export")
+    info("Starting production database backup and download")
 
-    warning("Production will only be read from; no backup, restore, or remote file write will run")
+    warning("Production will create a Craft database backup, then download it locally")
     db_path = extract_production_db()
     success(f"Production database dump ready: {db_path}")
 

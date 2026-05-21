@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 from craftcms_management.remote_ssh import (
     RemoteConfig,
+    build_scp_from_remote_command,
     build_scp_command,
     build_ssh_command,
     in_remote_path,
     load_remote_config,
     run_command,
+    run_command_capture,
     run_command_to_file,
 )
 
@@ -89,6 +91,15 @@ class RemoteSshCommandTests(unittest.TestCase):
             ["scp", "local.sql", "forge@example.com:/tmp/import.sql"],
         )
 
+    def test_builds_scp_from_remote_command(self) -> None:
+        """Copy a file from the configured SSH target."""
+        config = RemoteConfig("forge", "example.com", "/site/current")
+
+        self.assertEqual(
+            build_scp_from_remote_command(config, "/tmp/export.sql", Path("local.sql")),
+            ["scp", "forge@example.com:/tmp/export.sql", "local.sql"],
+        )
+
     def test_builds_command_in_remote_path(self) -> None:
         """Prefix commands with a change into the configured remote path."""
         config = RemoteConfig("forge", "example.com", "/site/current")
@@ -128,6 +139,20 @@ class RunCommandTests(unittest.TestCase):
             run_command_to_file(["ssh", "example.com", "dump"], output_path, "Dump failed")
 
         self.assertEqual(run.call_args.args[0], ["ssh", "example.com", "dump"])
+        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertTrue(run.call_args.kwargs["text"])
+        self.assertTrue(run.call_args.kwargs["check"])
+
+    @patch("craftcms_management.remote_ssh.subprocess.run")
+    def test_captures_command_stdout(self, run) -> None:
+        """Return stdout from a successful command."""
+        run.return_value.stdout = "created\n"
+
+        output = run_command_capture(["ssh", "example.com", "backup"], "Backup failed")
+
+        self.assertEqual(output, "created\n")
+        self.assertEqual(run.call_args.args[0], ["ssh", "example.com", "backup"])
+        self.assertEqual(run.call_args.kwargs["stdout"], subprocess.PIPE)
         self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
         self.assertTrue(run.call_args.kwargs["text"])
         self.assertTrue(run.call_args.kwargs["check"])
